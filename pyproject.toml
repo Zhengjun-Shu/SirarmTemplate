@@ -18,6 +18,9 @@ requires-python = ">=3.10"
 # project generic dependencies 项目通用依赖
 # ----------------------------------------------------------------
 dependencies = [
+    "sirarm_utils>=0.0.1",
+    "tensorboard>=2.20.0",
+    "torch>=1.10.0",
 ]
 
 [tool.setuptools.packages.find]
