@@ -1,0 +1,25 @@
+# ----------------------------------------------------------------
+# build system 构建系统
+# ----------------------------------------------------------------
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+# ----------------------------------------------------------------
+# project meta 项目元信息
+# ----------------------------------------------------------------
+[project]
+name = "sirarm_template"
+version = "0.0.1"
+description = ""
+requires-python = ">=3.10"
+
+# ----------------------------------------------------------------
+# project generic dependencies 项目通用依赖
+# ----------------------------------------------------------------
+dependencies = [
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["sirarm_template*"]
