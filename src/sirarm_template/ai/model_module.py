@@ -3,6 +3,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict
 
+from numpy.ma.extras import isin
 import torch
 from sirarm_utils.logger import setup_logger
 from sirarm_utils import increment_path
@@ -213,7 +214,7 @@ class ModelModule(ABC):
         )
 
     @abstractmethod
-    def evaluate(self, *args, **kwargs) -> Dict[str, any]:
+    def evaluate(self, *args, model=None, **kwargs) -> Dict[str, any]:
         raise NotImplementedError(
             "train_one_epoch method must be implemented | train_one_epoch方法必须实现"
         )
@@ -323,12 +324,18 @@ class ModelModule(ABC):
             "epoch": self.current_epoch + 1,
             "model": (
                 self.model.module
-                if isinstance(self.model,(torch.nn.DataParallel, torch.nn.parallel.DistributedDataParallel),)
+                if isinstance(
+                    self.model,
+                    (torch.nn.DataParallel, torch.nn.parallel.DistributedDataParallel),
+                )
                 else self.model
             ),
             "model_state_dict": (
                 self.model.module.state_dict()
-                if isinstance(self.model,(torch.nn.DataParallel, torch.nn.parallel.DistributedDataParallel),)
+                if isinstance(
+                    self.model,
+                    (torch.nn.DataParallel, torch.nn.parallel.DistributedDataParallel),
+                )
                 else self.model.state_dict()
             ),
             "optimizer_state_dict": self.optimizer.state_dict(),
@@ -566,7 +573,7 @@ class ModelModule(ABC):
         else:  # single-machine single-GPU | 单机单卡
             self._setup_single_machine_single_gpu_mode(**kwargs)
 
-    def _validate_epoch(self, **kwargs) -> Dict[str, any]:
+    def _validate_epoch(self, model, **kwargs) -> Dict[str, any]:
         """
         validate one epoch | 验证一个 epoch
 
@@ -580,7 +587,7 @@ class ModelModule(ABC):
 
         self.model.eval()
         with torch.no_grad():
-            metrics = self.evaluate()
+            metrics = self.evaluate(model=model, **kwargs)
         return metrics
 
     def is_best_model(self, metrics, **kwargs):
@@ -662,22 +669,37 @@ class ModelModule(ABC):
 
             # validate one epoch and get metrics
             val_metrics = {}
-            if self.val_loader is not None:
+            # broadcast metrics to all processes in distributed mode
+            if self.is_parallel:
+                import torch.distributed as dist
+
+                if self._is_master():
+                    # only master process performs validation
+                    if self.val_loader is not None:
+                        if isinstance(
+                            self.model,
+                            (
+                                (
+                                    torch.nn.DataParallel,
+                                    torch.nn.parallel.DistributedDataParallel,
+                                )
+                            ),
+                        ):
+                            rawModel = self.model.module
+                        else:
+                            rawModel = self.model
+                        val_metrics = self._validate_epoch(model=rawModel)
+                    # broadcast metrics to other processes
+                    metrics_list = [val_metrics]
+                    dist.broadcast_object_list(metrics_list, src=0)
+                else:
+                    # non-master processes wait and receive metrics
+                    metrics_list = [{}]
+                    dist.broadcast_object_list(metrics_list, src=0)
+                    val_metrics = metrics_list[0]
+            else:
+                # single process mode, just validate
                 val_metrics = self._validate_epoch()
-
-                # broadcast metrics to all processes in distributed mode
-                if self.is_parallel:
-                    import torch.distributed as dist
-
-                    if self._is_master():
-                        # master process has the metrics, broadcast to others
-                        metrics_list = [val_metrics]
-                        dist.broadcast_object_list(metrics_list, src=0)
-                    else:
-                        # non-master processes receive the metrics
-                        metrics_list = [{}]
-                        dist.broadcast_object_list(metrics_list, src=0)
-                        val_metrics = metrics_list[0]
 
             # check if best model and save checkpoint - only master process
             early_stop = False
@@ -734,7 +756,7 @@ class ModelModule(ABC):
             )
         self.model.eval()
         with torch.no_grad():
-            metrics = self.evaluate(**kwargs)
+            metrics = self.evaluate(self.model, **kwargs)
         self.logger.info("Evaluation completed! | 评估完成!")
         if isinstance(metrics, dict):
             for key, value in metrics.items():
