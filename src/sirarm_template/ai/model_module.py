@@ -29,6 +29,8 @@ class ModelModule(ABC):
         self.use_dp = use_dp
         # distributed parallel
         self._init_distributed_vars()
+        # init distributed
+        self.init_parallel(use_dp=use_dp)
         # running path
         self.running_path_build_config = {
             "running_path": running_path,
@@ -68,7 +70,7 @@ class ModelModule(ABC):
             if not self.is_parallel
             else setup_logger(f"{self.logger_name_prefix}`{self.rank}`")
         )
-        self._tb_logger = None
+        self.load_tb_logger()
 
         # early stop patience
         self.early_stop_patience = early_stop_patience
@@ -81,6 +83,11 @@ class ModelModule(ABC):
         self.best_metric = None
         # early stop counter
         self.early_stop_counter = 0
+
+        # run mode
+        self.is_train = False
+        # save mode
+        self.save_freq = False
 
     @property
     def tb_logger(self):
@@ -215,7 +222,8 @@ class ModelModule(ABC):
                 请确保通过使用 x 或 y 启动您的脚本
                 """
             )
-        self.device = torch.device("cuda")
+        torch.cuda.set_device(self.local_rank)
+        self.device = torch.device("cuda", self.local_rank)
         self.model.to(self.device)
         if missing_vars or self.use_dp:
             self.model = torch.nn.DataParallel(
@@ -563,14 +571,16 @@ class ModelModule(ABC):
             weight:
             use_dp: whether use DataParallel | 是否使用DataParallel
         """
+        # set run mode
+        self.is_train = True
         # load model
         self.load_model(**kwargs)
         # init parallel if available
         self.init_parallel(use_dp=use_dp, **kwargs)
         # setup parallel
         self.setup_parallel(use_dp=use_dp)
-        # load tb_logger
-        self.load_tb_logger()
+        # # load tb_logger
+        # self.load_tb_logger()
         # load dataloader
         self.train_loader = self.load_dataloader(mode="train", **kwargs)
         self.val_loader = self.load_dataloader(mode="val", **kwargs)
@@ -641,7 +651,7 @@ class ModelModule(ABC):
             # check if best model and save checkpoint - only master process
             early_stop = False
             if self._is_master():
-                if self.val_loader is not None:
+                if not self.save_freq and self.val_loader is not None:
                     # check if best model
                     if self.best_metric is None:
                         self.best_metric = val_metrics
@@ -687,6 +697,8 @@ class ModelModule(ABC):
         """
         run evaluation | 运行评估
         """
+        # set run mode
+        self.is_train = False
         if self.model is None:
             raise ValueError(
                 "The model is empty. Make sure that self.model is assigned in the overridden load_model() method | 模型为空。请确保重写的load_model()方法中对self.model进行了赋值"
@@ -706,6 +718,8 @@ class ModelModule(ABC):
         """
         run inference | 运行推理
         """
+        # set run mode
+        self.is_train = False
         if self.model is None:
             raise ValueError(
                 "The model is empty. Make sure that self.model is assigned in the overridden load_model() method | 模型为空。请确保重写的load_model()方法中对self.model进行了赋值"
