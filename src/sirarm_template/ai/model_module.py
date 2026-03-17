@@ -302,23 +302,25 @@ Current running path: {self.running_path}
             weight=None,
             epochs: int = 100,
             early_stop_patience: int = 10,
-            use_freq: bool = False,
-            save_freq: int = 10,
             use_dp: bool = False,
             use_amp: bool = True,
             use_val: bool = True,
+            use_best: bool = True,
+            use_last: bool = True,
+            use_freq: bool = False,
+            save_freq: int = None,
             **kwargs
     ):
         self.epochs = epochs
         self.use_dp = use_dp
         self.use_amp = use_amp
         self.early_stop_patience = early_stop_patience
-        self.save_freq = save_freq
+        self.save_freq = save_freq if save_freq is not None else self.save_freq
 
         self.is_training = True
         self.load_model(**kwargs)
         self.model = self.model_parallelization(self.model)
-        self.model = self.froze_model(self.model, **kwargs)
+        self.froze_model(**kwargs)
         self.load_optimizer(**kwargs)
         self.load_scheduler(**kwargs)
 
@@ -337,18 +339,20 @@ Current running path: {self.running_path}
             start_epoch = self.current_epoch + 1
 
         train_loader = self._load_dataloader(DATASET_MODE.TRAIN, paralle=True, **kwargs)
+        early_stop_flag = False
         for epoch in range(start_epoch, epochs):
             self.current_epoch = epoch
+            self.cancel_froze_model(epoch, **kwargs)
             self.train_one_epoch(epoch, epochs, train_loader, self.model, **kwargs)
-            if use_val:
-                metrics = self._validate(self.model, **kwargs)
-            else:
-                metrics = {}
-            self.update_scheduler(metrics=metrics, **kwargs)
 
-            early_stop_flag = False
+            metrics = self._validate(self.model, **kwargs) if use_val else {}
             if self.is_master:
-                if not use_freq:
+                # 间隔保存模型 | Save model at intervals
+                if use_freq:
+                    if (epoch + 1) % self.save_freq == 0:
+                        self.save_checkpoint(name=f"model_epoch_{epoch + 1}", **kwargs)
+                # 通过验证判断保存模型 | Save model based on validation metrics
+                if use_best and use_val:
                     if self.best_metrics is None:
                         self.best_metrics = metrics
                         self.early_stop_counter = 0
@@ -359,19 +363,17 @@ Current running path: {self.running_path}
                             self.save_checkpoint(name="best", **kwargs)
                         else:
                             self.early_stop_counter += 1
-                else:
-                    if (epoch + 1) % self.save_freq == 0:
-                        self.save_checkpoint(name=f"model_epoch_{epoch + 1}", **kwargs)
-
-                self.save_checkpoint(name="last", **kwargs)
-
+                # 保存最新模型 | Save the last model
+                if use_last:
+                    self.save_checkpoint(name="last", **kwargs)
+                self.custom_save(epoch, metrics, **kwargs)
+                # 早停判断 | Early stopping check
                 early_stop_flag = self.is_early_stopping(metrics=metrics, early_stop_count=self.early_stop_counter, **kwargs)
                 if self.parallel_mode in [PARALLEL_MODE.SM_GPU_DDP, PARALLEL_MODE.MM_GPU]:
                     early_stop_tensor = torch.tensor(
                         [1 if early_stop_flag else 0], device=self.device
                     )
                     self.sent_broadcast(early_stop_tensor)
-
             else:
                 if self.parallel_mode in [PARALLEL_MODE.SM_GPU_DDP, PARALLEL_MODE.MM_GPU]:
                     early_stop_tensor = self.receive_broadcast()
@@ -401,8 +403,11 @@ Current running path: {self.running_path}
             else:
                 return self.interface_single(model, **kwargs)
 
-    def froze_model(self, model, **kwargs):
-        return model
+    def froze_model(self, **kwargs):
+        pass
+
+    def cancel_froze_model(self, epoch, **kwargs):
+        pass
 
     def load_optimizer(self, **kwargs):
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=1e-4)
@@ -528,3 +533,6 @@ Current running path: {self.running_path}
         raise NotImplementedError(
             "interface_single(self,model,**kwargs) 方法没有被实现 | interface_single(self,model,**kwargs) method has not been implemented"
         )
+
+    def custom_save(self, epoch, metrics, **kwargs):
+        pass
