@@ -345,13 +345,13 @@ Current running path: {self.running_path}
             self.cancel_froze_model(epoch, **kwargs)
             self.train_one_epoch(epoch, epochs, train_loader, self.model, **kwargs)
 
-            metrics = self._validate(self.model, **kwargs) if use_val else {}
             if self.is_master:
                 # 间隔保存模型 | Save model at intervals
                 if use_freq:
                     if (epoch + 1) % self.save_freq == 0:
                         self.save_checkpoint(name=f"model_epoch_{epoch + 1}", **kwargs)
                 # 通过验证判断保存模型 | Save model based on validation metrics
+                metrics = self._validate(self.model, **kwargs) if use_val else {}
                 if use_best and use_val:
                     if self.best_metrics is None:
                         self.best_metrics = metrics
@@ -385,7 +385,8 @@ Current running path: {self.running_path}
     def run_val(self, **kwargs):
         assert self.model is not None, "未加载模型。请确保load_model() 方法对 self.model 赋值，并在已经调用 | The model is not loaded. Make sure that the load_model() method assigns a value to self.model and is already called"
         self.is_training = False
-        model = self.model.eval()
+        model = self.model
+        model.eval()
 
         with torch.no_grad():
             dataloader = self._load_dataloader(DATASET_MODE.VAL, paralle=False, **kwargs)
@@ -394,7 +395,8 @@ Current running path: {self.running_path}
     def run_infer(self, is_loader: bool = False, **kwargs):
         assert self.model is not None, "未加载模型。请确保load_model() 方法对 self.model 赋值，并在已经调用 | The model is not loaded. Make sure that the load_model() method assigns a value to self.model and is already called"
         self.is_training = False
-        model = self.model.eval()
+        model = self.model
+        model.eval()
 
         with torch.no_grad():
             if is_loader:
