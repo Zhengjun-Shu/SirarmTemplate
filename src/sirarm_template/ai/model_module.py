@@ -216,21 +216,11 @@ Current running path: {self.running_path}
             )
 
     def _validate(self, model, **kwargs):
-        if self.is_master:
-            val_loader = self._load_dataloader(DATASET_MODE.VAL, paralle=False, **kwargs)
-            rawModel = model.module if is_parallel_model(model) else model
-            rawModel.eval()
-            with torch.no_grad():
-                metrics = self.evaluate(dataloader=val_loader, model=rawModel, **kwargs)
-            if self.parallel_mode in [PARALLEL_MODE.SM_GPU_DDP, PARALLEL_MODE.MM_GPU]:
-                self.sent_broadcast(metrics)
-            return metrics
-        else:
-            if self.parallel_mode in [PARALLEL_MODE.SM_GPU_DDP, PARALLEL_MODE.MM_GPU]:
-                metrics = self.receive_broadcast()
-            else:
-                metrics = {}
-            return metrics
+        val_loader = self._load_dataloader(DATASET_MODE.VAL, paralle=False, **kwargs)
+        model.eval()
+        with torch.no_grad():
+            metrics = self.evaluate(dataloader=val_loader, model=model, **kwargs)
+        return metrics
 
     def _load_parallel_sampler(self, dataset, shuffle):
         if self.parallel_mode in [PARALLEL_MODE.SM_GPU_DDP, PARALLEL_MODE.MM_GPU]:
@@ -345,13 +335,13 @@ Current running path: {self.running_path}
             self.cancel_froze_model(epoch, **kwargs)
             self.train_one_epoch(epoch, epochs, train_loader, self.model, **kwargs)
 
+            metrics = self._validate(self.model, **kwargs) if use_val else {}
             if self.is_master:
                 # 间隔保存模型 | Save model at intervals
                 if use_freq:
                     if (epoch + 1) % self.save_freq == 0:
                         self.save_checkpoint(name=f"model_epoch_{epoch + 1}", **kwargs)
                 # 通过验证判断保存模型 | Save model based on validation metrics
-                metrics = self._validate(self.model, **kwargs) if use_val else {}
                 if use_best and use_val:
                     if self.best_metrics is None:
                         self.best_metrics = metrics
