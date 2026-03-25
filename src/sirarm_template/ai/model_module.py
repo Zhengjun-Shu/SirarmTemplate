@@ -309,8 +309,8 @@ Current running path: {self.running_path}
 
         self.is_training = True
         self.load_model(**kwargs)
-        self.model = self.model_parallelization(self.model)
         self.froze_model(**kwargs)
+        self.model = self.model_parallelization(self.model)
         self.load_optimizer(**kwargs)
         self.load_scheduler(**kwargs)
 
