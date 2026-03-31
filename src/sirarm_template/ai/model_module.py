@@ -6,12 +6,13 @@ from pathlib import Path
 
 import torch
 import torch.distributed as dist
+from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.tensorboard import SummaryWriter
+
 from sirarm_template.utils.ops import parse_version
 from sirarm_template.utils.torch import get_grad_scaler, load_checkpoint_support_submodule, is_parallel_model
 from sirarm_utils import increment_path
 from sirarm_utils.logger import setup_logger
-from torch.utils.data import DataLoader, DistributedSampler
-from torch.utils.tensorboard import SummaryWriter
 
 
 class PARALLEL_MODE(Enum):
@@ -120,16 +121,35 @@ Current running path: {self.running_path}
 当前运行配置为：{self.config}
 """)
 
-    @staticmethod
-    def sent_broadcast(content):
-        object_list = [content]
-        dist.broadcast_object_list(object_list, src=0)
+    def _broadcast_safe_obj(self, obj, use_cuda=False):
+        if isinstance(obj, torch.Tensor):
+            if use_cuda:
+                obj.to(self.device)
+                return obj
+            else:
+                return obj.detach().cpu()
+        if isinstance(obj, dict):
+            return {k: self._broadcast_safe_obj(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [self._broadcast_safe_obj(v) for v in obj]
+        if isinstance(obj, tuple):
+            return tuple(self._broadcast_safe_obj(v) for v in obj)
+        return obj
 
-    @staticmethod
-    def receive_broadcast():
-        object_list = [{}]
-        dist.broadcast_object_list(object_list, src=0)
-        return object_list[0]
+    def sent_broadcast(self, content, src=0):
+        payload = self._broadcast_safe_obj(content)
+        if self.is_parallel and dist.is_available() and dist.is_initialized():
+            object_list = [payload]
+            dist.broadcast_object_list(object_list, src=src)
+            return object_list[0]
+        return payload
+
+    def receive_broadcast(self, src=0):
+        if self.is_parallel and dist.is_available() and dist.is_initialized():
+            object_list = [None]
+            dist.broadcast_object_list(object_list, src=src)
+            return self._broadcast_safe_obj(object_list[0])
+        return None
 
     def _init_distributed(self):
         if not dist.is_initialized():
@@ -418,7 +438,7 @@ Current running path: {self.running_path}
         else:
             return False
 
-    def load_checkpoint(self, path: str = None, is_load_optimizer: bool = True, is_load_scheduler: bool = True, model_param_name: str = "model_state_dict", optimizer_param_name: str = "optimizer_state_dict", scheduler_param_name: str = "scheduler_state_dict", **kwargs):
+    def load_checkpoint(self, path: str = None, is_load_optimizer: bool = True, is_load_scheduler: bool = True, strict: bool = True, model_param_name: str = "model_state_dict", optimizer_param_name: str = "optimizer_state_dict", scheduler_param_name: str = "scheduler_state_dict", **kwargs):
         assert path is not None, "检查点/权重文件路径为空，无法加载 | The checkpoint / weight file path is empty and cannot be loaded"
         assert self.model is not None, "请先加载模型 | Please load the model first"
         if parse_version(torch.__version__) >= (2, 6, 0):
@@ -431,6 +451,7 @@ Current running path: {self.running_path}
                 model=self.model.module,
                 checkpoint=checkpoint,
                 param_name=model_param_name,
+                strict=strict,
                 sub_name=None,
                 load_args={}
             )
@@ -439,6 +460,7 @@ Current running path: {self.running_path}
                 model=self.model,
                 checkpoint=checkpoint,
                 param_name=model_param_name,
+                strict=strict,
                 sub_name=None,
                 load_args={}
             )
