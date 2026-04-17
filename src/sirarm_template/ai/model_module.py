@@ -58,6 +58,7 @@ class ModelModule(ABC):
             use_dp=False,
             use_parallel=True,
             parallel_backend="gloo",
+            show_running_info=True,
             **kwargs,
     ):
         # init status param | 初始化状态参数
@@ -111,15 +112,21 @@ class ModelModule(ABC):
         self.scaler = get_grad_scaler() if self.cuda_available else None
 
         # 运行信息输出 | print running info
-        self.logger.info(f"""
-当前运行模式为：{MODE_TIP_MAP["zh"][self.parallel_mode.value]}
-Current running mode: {MODE_TIP_MAP["en"][self.parallel_mode.value]}
-当前运行设备为：{self.device}
-Current running device: {self.device}
-当前运行路径为：{self.running_path}
-Current running path: {self.running_path}
-当前运行配置为：{self.config}
-""")
+        if show_running_info:
+            info = self.running_info()
+            self.logger.info(info["info_log"])
+
+    def running_info(self):
+        return {
+            "parallel_mode": self.parallel_mode.value,
+            "device": str(self.device),
+            "running_path": str(self.running_path),
+            "config": self.config,
+            "world_rank": self.rank,
+            "local_rank": self.local_rank,
+            "world_size": self.world_size,
+            "info_log": "\n当前运行模式：{}\nCurrent running mode: {}\n当前运行设备(Current running device)：{}\n当前运行路径(Current running path)：{}\n当前运行配置为(Current running config)：{}\n".format(MODE_TIP_MAP["zh"][self.parallel_mode.value], MODE_TIP_MAP["en"][self.parallel_mode.value], self.device, self.running_path, self.config, )
+        }
 
     def _broadcast_safe_obj(self, obj, use_cuda=False):
         if isinstance(obj, torch.Tensor):
@@ -438,7 +445,7 @@ Current running path: {self.running_path}
         else:
             return False
 
-    def load_checkpoint(self, path: str = None, is_load_optimizer: bool = True, is_load_scheduler: bool = True, strict: bool = True, model_param_name: str = "model_state_dict", optimizer_param_name: str = "optimizer_state_dict", scheduler_param_name: str = "scheduler_state_dict", **kwargs):
+    def load_checkpoint(self, path: str = None, is_load_optimizer: bool = True, is_load_scheduler: bool = True, strict: bool = True, model_param_name: str = "model", optimizer_param_name: str = "optimizer", scheduler_param_name: str = "scheduler", **kwargs):
         assert path is not None, "检查点/权重文件路径为空，无法加载 | The checkpoint / weight file path is empty and cannot be loaded"
         assert self.model is not None, "请先加载模型 | Please load the model first"
         if parse_version(torch.__version__) >= (2, 6, 0):
@@ -478,7 +485,7 @@ Current running path: {self.running_path}
                 f"Checkpoint loaded from {path};  save the weight time is {checkpoint.get('timestamp')};the epoch is {self.current_epoch + 1} from 1;"
             )
 
-    def save_checkpoint(self, path=None, name="model", ext=".mmpt",model_param_name:str="model_state_dict",optimizer_param_name:str="optimizer_state_dict",scheduler_param_name:str="scheduler_state_dict", **kwargs):
+    def save_checkpoint(self, path=None, name="model", ext=".mmpt", model_param_name: str = "model", optimizer_param_name: str = "optimizer", scheduler_param_name: str = "scheduler", **kwargs):
         checkpoint = {
             "epoch": self.current_epoch + 1,
             model_param_name: (
