@@ -61,6 +61,7 @@ class ModelModule(ABC):
             show_running_info=True,
             **kwargs,
     ):
+        self.init_kwargs = kwargs
         # init status param | 初始化状态参数
         self.cuda_available = None
         self.world_size = None
@@ -228,7 +229,7 @@ class ModelModule(ABC):
 
         if self.parallel_mode in [PARALLEL_MODE.SM_GPU_DDP, PARALLEL_MODE.MM_GPU]:
             return increment_path(
-                base_running_path / f"rank_{self.rank}",
+                Path(str(base_running_path)) / f"rank_{self.rank}",
                 sep="_",
                 mkdir=True,
                 increment=False,
@@ -245,7 +246,7 @@ class ModelModule(ABC):
         val_loader = self._load_dataloader(DATASET_MODE.VAL, parallel=parallel, **kwargs)
         model.eval()
         with torch.no_grad():
-            metrics = self.evaluate(dataloader=val_loader, model=model, **kwargs)
+            metrics = self.evaluate_train(dataloader=val_loader, model=model, **kwargs)
         return metrics
 
     def _load_parallel_sampler(self, dataset, shuffle):
@@ -262,9 +263,9 @@ class ModelModule(ABC):
             dataset = self.load_dataset_train(**kwargs)
         elif mode == DATASET_MODE.VAL:
             dataset = self.load_dataset_val(**kwargs)
-        elif mode == DATASET_MODE.TEST:
+        else:
             dataset = self.load_dataset_test(**kwargs)
-        dataloader_config = self.dataloader_config.get(mode.value).copy()
+        dataloader_config = self.dataloader_config.get(str(mode.value), dict()).copy()
         shuffle = dataloader_config.get("shuffle", False)
         if parallel:
             sampler = self._load_parallel_sampler(dataset, shuffle)
@@ -277,7 +278,9 @@ class ModelModule(ABC):
         else:
             return DataLoader(dataset, **dataloader_config)
 
-    def model_parallelization(self, model, ddp_config={}):
+    def model_parallelization(self, model, ddp_config=None):
+        if ddp_config is None:
+            ddp_config = {}
         if self.parallel_mode in [PARALLEL_MODE.CPU, PARALLEL_MODE.SS_GPU]:
             model = model.to(self.device)
         elif self.parallel_mode == PARALLEL_MODE.SM_GPU_DP:
@@ -310,7 +313,7 @@ class ModelModule(ABC):
         config_dataloader = {}
         for k, v in kwargs.items():
             config_dataloader[k] = v
-        self.dataloader_config[mode.value] = config_dataloader
+        self.dataloader_config[str(mode.value)] = config_dataloader
 
     def run_train(
             self,
@@ -406,7 +409,7 @@ class ModelModule(ABC):
 
         with torch.no_grad():
             dataloader = self._load_dataloader(DATASET_MODE.VAL, parallel=False, **kwargs)
-            return self.evaluate(dataloader, model, **kwargs)
+            return self.evaluate_val(dataloader, model, **kwargs)
 
     def run_infer(self, is_loader: bool = False, **kwargs):
         assert self.model is not None, "未加载模型。请确保load_model() 方法对 self.model 赋值，并在已经调用 | The model is not loaded. Make sure that the load_model() method assigns a value to self.model and is already called"
@@ -528,10 +531,18 @@ class ModelModule(ABC):
             "train_one_epoch(self, epoch, epoches, dataloader, model, **kwargs)方法必须实现 | train_one_epoch(self, epoch, epoches, dataloader, model, **kwargs) method must be implemented"
         )
 
-    @abstractmethod
     def evaluate(self, dataloader, model, **kwargs):
         raise NotImplementedError(
             "evaluate(self,dataloader, model, **kwargs)方法必须实现 | evaluate(self,dataloader, model, **kwargs) method must be implemented"
+        )
+
+    def evaluate_train(self, dataloader, model, **kwargs):
+        self.logger.warning("目前已将训练时evaluate和验证时evaluate实现分离。建议实现`train_evaluate(self, dataloader, model, **kwargs)`方法来替代原evaluate。当前版本依旧兼容evaluate作为训练时evaluate，将在0.0.4版本移除支持。| Currently, the evaluation at training time and evaluate at validation time have been separated. It is recommended to implement the 'train_evaluate (self, dataloader, model, kwargs)' method to replace the original evaluate. The current version is still compatible with evaluate as a training evaluate, and will be removed in version `0.0.4`")
+        return self.evaluate(dataloader, model, **kwargs)
+
+    def evaluate_val(self, dataloader, model, **kwargs):
+        raise NotImplementedError(
+            "val_evaluate(self, dataloader, model, **kwargs)方法必须被实现 | val_evaluate(self, dataloader, model, **kwargs) method must be implemented"
         )
 
     def load_dataset_val(self, **kwargs):
