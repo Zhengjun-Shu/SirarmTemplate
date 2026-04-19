@@ -241,8 +241,8 @@ class ModelModule(ABC):
                 increment=False
             )
 
-    def _validate(self, model, **kwargs):
-        val_loader = self._load_dataloader(DATASET_MODE.VAL, paralle=False, **kwargs)
+    def _validate(self, model, parallel=True, **kwargs):
+        val_loader = self._load_dataloader(DATASET_MODE.VAL, parallel=parallel, **kwargs)
         model.eval()
         with torch.no_grad():
             metrics = self.evaluate(dataloader=val_loader, model=model, **kwargs)
@@ -254,7 +254,7 @@ class ModelModule(ABC):
         else:
             return None
 
-    def _load_dataloader(self, mode: DATASET_MODE, paralle=False, **kwargs):
+    def _load_dataloader(self, mode: DATASET_MODE, parallel=False, **kwargs):
         if mode not in [DATASET_MODE.TRAIN, DATASET_MODE.VAL, DATASET_MODE.TEST]:
             raise ValueError(f"{mode}是不可识别的模式 | {mode} is not a valid mode")
 
@@ -266,7 +266,7 @@ class ModelModule(ABC):
             dataset = self.load_dataset_test(**kwargs)
         dataloader_config = self.dataloader_config.get(mode.value).copy()
         shuffle = dataloader_config.get("shuffle", False)
-        if paralle:
+        if parallel:
             sampler = self._load_parallel_sampler(dataset, shuffle)
         else:
             sampler = None
@@ -354,14 +354,14 @@ class ModelModule(ABC):
             )
             start_epoch = self.current_epoch + 1
 
-        train_loader = self._load_dataloader(DATASET_MODE.TRAIN, paralle=True, **kwargs)
+        train_loader = self._load_dataloader(DATASET_MODE.TRAIN, parallel=True, **kwargs)
         early_stop_flag = False
         for epoch in range(start_epoch, epochs):
             self.current_epoch = epoch
             self.cancel_froze_model(epoch, **kwargs)
             self.train_one_epoch(epoch, epochs, train_loader, self.model, **kwargs)
 
-            metrics = self._validate(self.model, **kwargs) if use_val else {}
+            metrics = self._validate(self.model, self.is_parallel, **kwargs) if use_val else {}
             if self.is_master:
                 # 间隔保存模型 | Save model at intervals
                 if use_freq:
@@ -405,7 +405,7 @@ class ModelModule(ABC):
         model.eval()
 
         with torch.no_grad():
-            dataloader = self._load_dataloader(DATASET_MODE.VAL, paralle=False, **kwargs)
+            dataloader = self._load_dataloader(DATASET_MODE.VAL, parallel=False, **kwargs)
             return self.evaluate(dataloader, model, **kwargs)
 
     def run_infer(self, is_loader: bool = False, **kwargs):
@@ -416,7 +416,7 @@ class ModelModule(ABC):
 
         with torch.no_grad():
             if is_loader:
-                dataloader = self._load_dataloader(DATASET_MODE.TEST, paralle=False, **kwargs)
+                dataloader = self._load_dataloader(DATASET_MODE.TEST, parallel=False, **kwargs)
                 return self.interface_loader(dataloader, model, **kwargs)
             else:
                 return self.interface_single(model, **kwargs)
