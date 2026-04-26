@@ -500,7 +500,7 @@ class ModelModule(ABC):
             scheduler_param_name: (
                 self.scheduler.state_dict() if self.scheduler is not None else None
             ),
-            "config": self.config.__dict__ if hasattr(self.config, "__dict__") else {},
+            "config": dict(self.config) if isinstance(self.config, dict) else (vars(self.config).copy() if hasattr(self.config, "__dict__") else {}),
             "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
         }
         if path is None:
