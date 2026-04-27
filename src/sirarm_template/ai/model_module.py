@@ -94,11 +94,8 @@ class ModelModule(ABC):
         # 日志初始化 | logger initialization
         self.logger_name_prefix = logger_name_prefix
         # 控制台日志
-        self.logger = (
-            setup_logger(name=self.logger_name_prefix)
-            if not self.is_parallel
-            else setup_logger(f"{self.logger_name_prefix} rank_{self.rank}")
-        )
+        self.logger = None
+        self.setup_logger()
         # tensorboard 日志初始化 | tensorboard logger initialization
         self.tb_logger = SummaryWriter(log_dir=str(Path(self.running_path) / "tb_log"))
 
@@ -116,6 +113,13 @@ class ModelModule(ABC):
         if show_running_info:
             info = self.running_info()
             self.logger.info(info["info_log"])
+
+    def setup_logger(self):
+        self.logger = (
+            setup_logger(name=self.logger_name_prefix)
+            if not self.is_parallel
+            else setup_logger(f"{self.logger_name_prefix} rank_{self.rank}")
+        )
 
     def running_info(self):
         return {
