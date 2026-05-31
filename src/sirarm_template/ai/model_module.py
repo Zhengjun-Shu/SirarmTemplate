@@ -319,6 +319,19 @@ class ModelModule(ABC):
 			config_dataloader[k] = v
 		self.dataloader_config[str(mode.value)] = config_dataloader
 	
+	def train_from_weight(self, weight, **kwargs):
+		self.load_checkpoint(weight, is_load_optimizer=False, is_load_scheduler=False, **kwargs)
+		self.current_epoch = 0
+		if self.logger:
+			self.logger.info(f"从 {weight} 加载权重开始训练 | Load {weight} to start training")
+	
+	def train_from_resume(self, resume, **kwargs):
+		self.load_checkpoint(resume, is_load_optimizer=True, is_load_scheduler=True, **kwargs)
+		self.logger.info(
+			f"Resuming training from `{resume}`: epoch {self.current_epoch + 1} from 1"
+		)
+		start_epoch = self.current_epoch + 1
+	
 	def run_train(
 		self,
 		resume=None,
@@ -349,17 +362,10 @@ class ModelModule(ABC):
 		
 		start_epoch = 0
 		if weight:
-			self.load_checkpoint(weight, is_load_optimizer=False, is_load_scheduler=False, **kwargs)
-			self.current_epoch = 0
-			if self.logger:
-				self.logger.info(f"从 {weight} 加载权重开始训练 | Load {weight} to start training")
+			self.train_from_weight(weight,**kwargs)
 		
 		if resume:
-			self.load_checkpoint(resume, is_load_optimizer=True, is_load_scheduler=True, **kwargs)
-			self.logger.info(
-				f"Resuming training from `{resume}`: epoch {self.current_epoch + 1} from 1"
-			)
-			start_epoch = self.current_epoch + 1
+			self.train_from_resume(resume, **kwargs)
 		
 		train_loader = self._load_dataloader(DATASET_MODE.TRAIN, parallel=True, **kwargs)
 		early_stop_flag = False
