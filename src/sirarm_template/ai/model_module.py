@@ -1,6 +1,7 @@
 import datetime
 import os
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from enum import Enum
 from pathlib import Path
 
@@ -132,6 +133,25 @@ class ModelModule(ABC):
 			"world_size": self.world_size,
 			"info_log": "\n当前运行模式：{}\nCurrent running mode: {}\n当前运行设备(Current running device)：{}\n当前运行路径(Current running path)：{}\n当前运行配置为(Current running config)：{}\n".format(MODE_TIP_MAP["zh"][self.parallel_mode.value], MODE_TIP_MAP["en"][self.parallel_mode.value], self.device, self.running_path, self.config, )
 		}
+	
+	def params_info(self):
+		all_params = 0
+		all_trainable = 0
+		info_str = ""
+		info_dict = defaultdict(lambda: defaultdict(float))
+		for name, module in self.model.named_modules():
+			if len(list(module.children())) == 0:  # 叶子模块
+				total = sum(p.numel() for p in module.parameters())
+				trainable = sum(p.numel() for p in module.parameters() if p.requires_grad)
+				if total > 0:
+					info_str += f"{name:<60s}:{total / 1e6}M  (trainable: {trainable / 1e6}M)\n"
+					info_dict[name]["total"] = total
+					info_dict[name]["trainable"] = trainable
+					all_params += total / 1e6
+					all_trainable += trainable / 1e6
+		info_str += f"Total parameters: {all_params:.2f}M, trainable: {all_trainable:.2f}M"
+		info_dict["total"] = defaultdict(total=all_params, trainable=all_trainable)
+		return info_str, info_dict
 	
 	def _broadcast_safe_obj(self, obj, use_cuda=False):
 		if isinstance(obj, torch.Tensor):
@@ -362,7 +382,7 @@ class ModelModule(ABC):
 		
 		start_epoch = 0
 		if weight:
-			self.train_from_weight(weight,**kwargs)
+			self.train_from_weight(weight, **kwargs)
 		
 		if resume:
 			self.train_from_resume(resume, **kwargs)
