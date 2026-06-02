@@ -405,6 +405,7 @@ class ModelModule(ABC):
 					if self.best_metrics is None:
 						self.best_metrics = metrics
 						self.early_stop_counter = 0
+						self.save_checkpoint(name="best", **kwargs)
 					else:
 						if self.is_best_model(metrics, **kwargs):
 							self.best_metrics = metrics
