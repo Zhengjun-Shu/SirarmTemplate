@@ -266,11 +266,10 @@ class ModelModule(ABC):
 				increment=False
 			)
 	
-	def _validate(self, model, parallel=True, **kwargs):
-		val_loader = self._load_dataloader(DATASET_MODE.VAL, parallel=parallel, **kwargs)
+	def _validate(self, dataloader, model, parallel=True, **kwargs):
 		model.eval()
 		with torch.no_grad():
-			metrics = self.evaluate_train(dataloader=val_loader, model=model, **kwargs)
+			metrics = self.evaluate_train(dataloader=dataloader, model=model, **kwargs)
 		return metrics
 	
 	def _load_parallel_sampler(self, dataset, shuffle):
@@ -387,13 +386,14 @@ class ModelModule(ABC):
 		if resume:
 			self.train_from_resume(resume, **kwargs)
 		
-		train_loader = self._load_dataloader(DATASET_MODE.TRAIN, parallel=True, **kwargs)
+		train_loader = self._load_dataloader(DATASET_MODE.TRAIN, parallel=self.use_parallel, **kwargs)
+		val_loader = self._load_dataloader(DATASET_MODE.VAL, parallel=self.use_parallel, **kwargs) if use_val else None
 		early_stop_flag = False
 		for epoch in range(start_epoch, epochs):
 			self.current_epoch = epoch
 			self.cancel_froze_model(epoch, **kwargs)
 			self.train_one_epoch(epoch, epochs, train_loader, self.model, **kwargs)
-			metrics = self._validate(self.model, self.is_parallel, **kwargs) if use_val else {}
+			metrics = self._validate(val_loader, self.model, self.is_parallel, **kwargs) if use_val else {}
 			self.update_scheduler(epoch, metrics, **kwargs)
 			if self.is_master:
 				# 间隔保存模型 | Save model at intervals
