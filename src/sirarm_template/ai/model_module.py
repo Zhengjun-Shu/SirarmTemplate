@@ -349,7 +349,6 @@ class ModelModule(ABC):
 		self.logger.info(
 			f"Resuming training from `{resume}`: epoch {self.current_epoch + 1} from 1"
 		)
-		start_epoch = self.current_epoch + 1
 	
 	def run_train(
 		self,
@@ -385,6 +384,7 @@ class ModelModule(ABC):
 		
 		if resume:
 			self.train_from_resume(resume, **kwargs)
+			start_epoch = self.current_epoch + 1
 		
 		train_loader = self._load_dataloader(DATASET_MODE.TRAIN, parallel=self.use_parallel, **kwargs)
 		val_loader = self._load_dataloader(DATASET_MODE.VAL, parallel=self.use_parallel, **kwargs) if use_val else None
