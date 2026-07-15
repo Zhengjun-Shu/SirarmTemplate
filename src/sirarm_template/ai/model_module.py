@@ -60,6 +60,8 @@ class ModelModule(ABC):
 		use_parallel=True,
 		parallel_backend="gloo",
 		show_running_info=True,
+		use_ema=False,
+		ema_decay=0.999,
 		**kwargs,
 	):
 		self.init_kwargs = kwargs
@@ -83,6 +85,10 @@ class ModelModule(ABC):
 		
 		self.config = config
 		self.use_amp = use_amp
+		# model EMA
+		self.ema = None
+		self.use_ema = use_ema
+		self.ema_decay = ema_decay
 		
 		# 并行参数 | parallel param
 		self.use_dp = use_dp
@@ -372,11 +378,14 @@ class ModelModule(ABC):
 		self.save_freq = save_freq if save_freq is not None else self.save_freq
 		
 		self.is_training = True
+		self.hook_train_load_start(**kwargs)
 		self.load_model(**kwargs)
 		self.froze_model(**kwargs)
 		self.model = self.model_parallelization(self.model)
+		self.load_ema(**kwargs)
 		self.load_optimizer(**kwargs)
 		self.load_scheduler(**kwargs)
+		self.hook_train_load_end(**kwargs)
 		
 		start_epoch = 0
 		if weight:
@@ -389,6 +398,7 @@ class ModelModule(ABC):
 		train_loader = self._load_dataloader(DATASET_MODE.TRAIN, parallel=self.use_parallel, **kwargs)
 		val_loader = self._load_dataloader(DATASET_MODE.VAL, parallel=self.use_parallel, **kwargs) if use_val else None
 		early_stop_flag = False
+		self.hook_train_epoch_start(**kwargs)
 		for epoch in range(start_epoch, epochs):
 			self.current_epoch = epoch
 			self.cancel_froze_model(epoch, **kwargs)
@@ -455,6 +465,15 @@ class ModelModule(ABC):
 			else:
 				return self.interface_single(model, **kwargs)
 	
+	def load_ema(self, **kwargs):
+		if self.use_ema and self.ema is None:
+			from sirarm_template.utils import ModelEMA
+			self.ema = ModelEMA(
+				model=self.model,
+				decay=self.ema_decay
+			)
+			self.logger.info("Model EMA has loaded; if you want to use it, \n please call `self.ema.update()` after each training step, \n call `self.ema.apply_shadow()` before validation or inference, \n and call `self.ema.restore()` after validation or inference.")
+	
 	def froze_model(self, **kwargs):
 		pass
 	
@@ -479,7 +498,7 @@ class ModelModule(ABC):
 		else:
 			return False
 	
-	def load_checkpoint(self, path: str = None, is_load_optimizer: bool = True, is_load_scheduler: bool = True, strict: bool = True, model_param_name: str = "model", optimizer_param_name: str = "optimizer", scheduler_param_name: str = "scheduler", **kwargs):
+	def load_checkpoint(self, path: str = None, is_load_optimizer: bool = True, is_load_scheduler: bool = True, is_load_ema: bool = False, strict: bool = True, model_param_name: str = "model", optimizer_param_name: str = "optimizer", scheduler_param_name: str = "scheduler", ema_param_name: str = "ema", **kwargs):
 		assert path is not None, "检查点/权重文件路径为空，无法加载 | The checkpoint / weight file path is empty and cannot be loaded"
 		assert self.model is not None, "请先加载模型 | Please load the model first"
 		if parse_version(torch.__version__) >= (2, 6, 0):
@@ -513,13 +532,17 @@ class ModelModule(ABC):
 		if is_load_scheduler and self.scheduler is not None and scheduler_param_name in checkpoint:
 			self.scheduler.load_state_dict(checkpoint.get(scheduler_param_name))
 		
+		# load ema state dict
+		if is_load_ema and self.ema is not None and ema_param_name in checkpoint:
+			self.ema.load_state_dict(checkpoint.get(ema_param_name))
+		
 		self.current_epoch = checkpoint.get("epoch", 1) - 1
 		if self.logger is not None:
 			self.logger.info(
 				f"Checkpoint loaded from {path};  save the weight time is {checkpoint.get('timestamp')};the epoch is {self.current_epoch + 1} from 1;"
 			)
 	
-	def save_checkpoint(self, path=None, name="model", ext=".mmpt", model_param_name: str = "model", optimizer_param_name: str = "optimizer", scheduler_param_name: str = "scheduler", **kwargs):
+	def save_checkpoint(self, path=None, name="model", ext=".mmpt", model_param_name: str = "model", optimizer_param_name: str = "optimizer", scheduler_param_name: str = "scheduler", ema_param_name: str = "ema", **kwargs):
 		checkpoint = {
 			"epoch": self.current_epoch + 1,
 			model_param_name: (
@@ -531,6 +554,7 @@ class ModelModule(ABC):
 			scheduler_param_name: (
 				self.scheduler.state_dict() if self.scheduler is not None else None
 			),
+			ema_param_name: self.ema.state_dict() if self.ema is not None else None,
 			"config": dict(self.config) if isinstance(self.config, dict) else (vars(self.config).copy() if hasattr(self.config, "__dict__") else {}),
 			"timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
 		}
@@ -562,15 +586,10 @@ class ModelModule(ABC):
 			"train_one_epoch(self, epoch, epoches, dataloader, model, **kwargs)方法必须实现 | train_one_epoch(self, epoch, epoches, dataloader, model, **kwargs) method must be implemented"
 		)
 	
-	def evaluate(self, dataloader, model, **kwargs):
-		raise NotImplementedError(
-			"evaluate(self,dataloader, model, **kwargs)方法必须实现 | evaluate(self,dataloader, model, **kwargs) method must be implemented"
-		)
-	
 	def evaluate_train(self, dataloader, model, **kwargs):
-		self.logger.warning(
-			"目前已将训练时evaluate和验证时evaluate实现分离。建议实现`train_evaluate(self, dataloader, model, **kwargs)`方法来替代原evaluate。当前版本依旧兼容evaluate作为训练时evaluate，将在0.0.4版本移除支持。| Currently, the evaluation at training time and evaluate at validation time have been separated. It is recommended to implement the 'train_evaluate (self, dataloader, model, kwargs)' method to replace the original evaluate. The current version is still compatible with evaluate as a training evaluate, and will be removed in version `0.0.4`")
-		return self.evaluate(dataloader, model, **kwargs)
+		raise NotImplementedError(
+			"evaluate_train(self,dataloader, model, **kwargs)方法必须实现 | evaluate_train(self,dataloader, model, **kwargs) method must be implemented"
+		)
 	
 	def evaluate_val(self, dataloader, model, **kwargs):
 		raise NotImplementedError(
@@ -598,4 +617,22 @@ class ModelModule(ABC):
 		)
 	
 	def custom_save(self, epoch, metrics, **kwargs):
+		pass
+	
+	def hook_train_load_start(self, **kwargs):
+		"""
+		a hook before `load_model`/ `froze_model`/`model_parallelization`/`load_ema`/`load_optimizer`/`load_scheduler` in `run_train`
+		"""
+		pass
+	
+	def hook_train_load_end(self, **kwargs):
+		"""
+		a hook after `load_model`/ `froze_model`/`model_parallelization`/`load_ema`/`load_optimizer`/`load_scheduler` in `run_train`
+		"""
+		pass
+	
+	def hook_train_epoch_start(self, **kwargs):
+		"""
+		a hook before `for epoch in range(start_epoch, epochs):` in `run_train`
+		"""
 		pass
